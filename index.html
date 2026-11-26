@@ -143,11 +143,11 @@
   </section>
 </div>
 <script>
-  // 세 파일은 항상 같은 판이어야 한다. 브라우저가 일부만 옛 파일로 쥐고 있으면 버튼이 먹통이 되므로,
+  // 게임 파일은 항상 같은 판이어야 한다. 브라우저가 일부만 옛 파일로 쥐고 있으면 버튼이 먹통이 되므로,
   // 열 때마다 주소 뒤에 시각을 붙여 새로 받게 한다.
   (function () {
     var v = Date.now();
-    ['rules.js', 'ai.js', 'game.js'].forEach(function (name) {
+    ['rules.js', 'ai.js', 'sprites.js', 'game.js'].forEach(function (name) {
       document.write('<script src="' + name + '?v=' + v + '"><\/script>');
     });
   })();

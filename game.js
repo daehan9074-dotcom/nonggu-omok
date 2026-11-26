@@ -449,9 +449,12 @@
     pathOf([proj(7.2, 1.2, 3.05), proj(7.8, 1.2, 3.05), proj(7.8, 1.2, 3.5), proj(7.2, 1.2, 3.5)], true);
     ctx.strokeStyle = '#d6401c'; ctx.lineWidth = Math.max(1.2, 0.05 * k); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1;
+    // 볼이 그물을 지나면 그물이 아래로 늘어났다가 좌우로 흔들리며 돌아온다
+    const sk = view.swish ? (performance.now() - view.swish) / SWISH_MS : 1, e = sk >= 0 && sk < 1 ? 1 - sk : 0;
+    const drop = 0.14 * e, sway = Math.sin(sk * Math.PI * 4) * 0.05 * e, nr = 0.12 - 0.04 * e;
     for (let i = 0; i < 12; i++) {
       const t = Math.PI * 2 * i / 12;
-      pathOf([proj(RIM.x + 0.23 * Math.cos(t), RIM.y + 0.23 * Math.sin(t), RIM_Z), proj(RIM.x + 0.12 * Math.cos(t + 0.4), RIM.y + 0.12 * Math.sin(t + 0.4), RIM_Z - 0.42)]); ctx.stroke();
+      pathOf([proj(RIM.x + 0.23 * Math.cos(t), RIM.y + 0.23 * Math.sin(t), RIM_Z), proj(RIM.x + nr * Math.cos(t + 0.4) + sway, RIM.y + nr * Math.sin(t + 0.4), RIM_Z - 0.42 - drop)]); ctx.stroke();
     }
     pathOf(Array.from({ length: 33 }, (_, i) => { const t = Math.PI * 2 * i / 32; return proj(RIM.x + 0.23 * Math.cos(t), RIM.y + 0.23 * Math.sin(t), RIM_Z); }), true);
     ctx.strokeStyle = '#e8501f'; ctx.lineWidth = Math.max(2, 0.075 * k); ctx.stroke();
@@ -643,255 +646,13 @@
   }
 
   // ───────── 도트 캐릭터 ─────────
-  // 작은 그림(34×58 점)을 코드로 찍어 만든 뒤, 화면에는 점이 뭉개지지 않게 그대로 키워서 그린다.
-  // 팀·번호·자세마다 한 장씩 만들어 두고 다시 쓴다.
-  const FIG_BIG = 1.28;                                     // 도트 캐릭터는 머리가 큰 비율이라 실제 키보다 크게 세운다
+  // 선수 그림은 sprites.js 가 관절 자세로 찍어 만든다(40×66 점). 화면에는 점이 뭉개지지 않게 그대로 키워서 그린다.
+  const FIG_BIG = 1.28;                                     // 도트 캐릭터는 코트에서 잘 보이게 실제 키보다 크게 세운다
   const figH = (p, g) => heightOf(p) * g.s * FIG_TILT * FIG_BIG;
-  const SPR_W = 40, SPR_H = 58, SPR_TOP = 10, SPR_FOOT = 55, SPR_MID = 20;   // 머리 꼭대기 줄, 발바닥 줄, 가운데 세로줄
-  // 포지션별 체형: 몸통 반폭 · 팔 굵기 · 다리 굵기 (가드는 날씬하게, 센터는 어깨가 넓고 굵게)
-  const SPR_BUILD = {
-    1: { hw: 7, arm: 2, leg: 4 }, 2: { hw: 7, arm: 3, leg: 4 }, 3: { hw: 8, arm: 3, leg: 5 },
-    4: { hw: 9, arm: 3, leg: 5 }, 5: { hw: 9, arm: 4, leg: 6 },
-  };
-
-  const SPR_TEAM = {
-    A: { jersey: ['#ff9a66', '#ee6a36', '#b9431a'], shorts: ['#d9552a', '#b9431a', '#8a2f10'], trim: '#fff3e6' },
-    B: { jersey: ['#6f9fe6', '#3f6fb8', '#264c88'], shorts: ['#3a66ab', '#274d88', '#19345f'], trim: '#e9f1ff' },
-  };
-  // 번호마다 피부색과 머리 모양을 다르게 해서 누가 누구인지 구분되게 한다
-  const SPR_LOOK = {
-    1: { skin: ['#ffd9b5', '#f2bb8e', '#c98f62'], hair: ['#4a3324', '#2a1c12'], style: 'short' },
-    2: { skin: ['#e9b98a', '#d39a68', '#a87245'], hair: ['#2b2320', '#15100e'], style: 'band' },
-    3: { skin: ['#c98d5e', '#a86e42', '#7e4f2c'], hair: ['#241a16', '#120c0a'], style: 'flat' },
-    4: { skin: ['#f3c9a0', '#dca777', '#b07d50'], hair: ['#7a4a22', '#4f2e12'], style: 'afro' },
-    5: { skin: ['#9a6238', '#7e4c28', '#5a3418'], hair: ['#1c1512', '#0c0807'], style: 'beard' },
-  };
-  const SPR_DIGIT = {
-    1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
-    2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
-    3: ['.###.', '#...#', '....#', '..##.', '....#', '#...#', '.###.'],
-    4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
-    5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
-  };
-  const spriteCache = new Map();
   const FACES = ['r', 'br', 'b', 'bl', 'l', 'fl', 'f', 'fr'];   // 오른쪽에서 시계 반대 방향으로(화면 위쪽이 먼 쪽)
   const stride = {};                    // 지금 칸을 옮기는 중인 선수 (달리기 그림을 쓴다)
-
-  // 자세: stand 서기 · ball 볼 들기 · up 수비 팔 들기 · shoot 슛 · run1/run2 달리기 · passL/passR 패스 · reb 리바운드 · screen 스크린
-  // back 이 참이면 뒷모습(얼굴 대신 뒤통수, 등번호)
-  // turn 이 1 이면 화면 오른쪽으로, -1 이면 왼쪽으로 45도 돌아선 모습 (오른쪽 그림을 좌우로 뒤집어 왼쪽을 만든다)
-  function makeSprite(team, num, pose, back, turn = 0) {
-    const mir = turn < 0, T = turn ? 1 : 0;
-    if (mir) pose = pose === 'passL' ? 'passR' : pose === 'passR' ? 'passL' : pose;
-    const cv = document.createElement('canvas'); cv.width = SPR_W; cv.height = SPR_H;
-    const c = cv.getContext('2d');
-    const t = SPR_TEAM[team], look = SPR_LOOK[num], sk = look.skin, hr = look.hair, bd = SPR_BUILD[num], M = SPR_MID;
-    const raw = (x0, y0, x1, y1, col) => { c.fillStyle = col; c.fillRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1); };
-    const box = (x0, y0, x1, y1, col) => mir ? raw(SPR_W - 1 - x1, y0, SPR_W - 1 - x0, y1, col) : raw(x0, y0, x1, y1, col);
-    const dot = (x, y, col) => box(x, y, x, y, col);
-    // 밝은 면(왼쪽 한 줄) · 기본 · 어두운 면(오른쪽 두 줄)
-    const shade = (x0, y0, x1, y1, pal) => { box(x0, y0, x1, y1, pal[1]); box(x0, y0, x0, y1, pal[0]); box(Math.max(x0 + 1, x1 - 1), y0, x1, y1, pal[2]); };
-    const WHITE = ['#ffffff', '#eef0f3', '#c3c9d1'];
-    const tx0 = M - bd.hw + T, tx1 = M - 1 + bd.hw;                  // 몸통의 왼쪽·오른쪽 끝 (돌아서면 조금 좁아 보인다)
-    const lift = pose === 'run1' ? 'L' : pose === 'run2' ? 'R' : null;   // 달리기: 든 다리
-    const wide = pose === 'screen' || pose === 'guard' ? 1 : 0;       // 스크린·수비: 다리를 벌리고 버틴다
-
-    // 다리 · 양말 · 신발
-    for (const [x0, x1, side] of [[tx0 + 1 - wide, tx0 + bd.leg - wide, 'L'], [tx1 - bd.leg + wide, tx1 - 1 + wide, 'R']]) {
-      const up = lift === side ? 4 : 0;                               // 든 다리는 무릎을 접어 짧게 보인다
-      shade(x0, 46, x1, 50 - up, sk); shade(x0, 51 - up, x1, 52 - up, WHITE);
-      shade(x0 - 1, 53 - up, x1 + 1, 54 - up, WHITE); box(x0 - 1, 55 - up, x1 + 1, 55 - up, '#3a3f48');
-      dot(x0 + 1, 53 - up, t.jersey[1]);                              // 신발의 팀 색 포인트
-    }
-    // 반바지
-    shade(tx0, 39, tx1, 45, t.shorts);
-    c.clearRect(M - 1, 43, 2, 3);
-    box(tx0, 39, tx1, 39, t.trim);                                    // 허리 밴드
-    box(tx0, 41, tx0, 45, t.trim); box(tx1, 41, tx1, 45, t.trim);     // 옆줄
-
-    // 팔 (몸통보다 먼저 그려서 어깨가 덮이게). 안쪽 끝에서 바깥으로 o0~o1 칸, 세로 y0~y1
-    const aR0 = tx1 + 2 - T, aL1 = tx0 - 2, W = bd.arm - 1;          // 돌아선 쪽 팔은 몸 뒤로 반쯤 가린다
-    const seg = (side, o0, o1, y0, y1) => side === 'R' ? shade(aR0 + o0, y0, aR0 + o1, y1, sk) : shade(aL1 - o1, y0, aL1 - o0, y1, sk);
-    const both = (...a) => { seg('L', ...a); seg('R', ...a); };
-    const down = side => { seg(side, 0, W, 27, 39); seg(side, 0, W, 40, 41); };
-    const passSide = pose === 'passL' ? 'L' : pose === 'passR' ? 'R' : null;
-    if (pose === 'up') { both(0, W, 13, 28); both(0, W + 1, 10, 13); }                  // 수비: 양팔을 위로
-    else if (pose === 'shoot') { both(-2, W - 2, 9, 28); both(-5, -2, 4, 9); }          // 슛: 양팔을 머리 위로 모은다
-    else if (pose === 'reb') { both(-1, W - 1, 6, 28); both(-1, W, 2, 6); }             // 리바운드: 양팔을 끝까지 뻗는다
-    else if (pose === 'ball') { down('L'); seg('R', 0, W, 27, 33); seg('R', 0, W + 3, 33, 36); }   // 볼을 든 팔은 앞으로
-    else if (lift) {                                                  // 달리기: 든 다리의 반대쪽 팔을 접어 올린다
-      const fw = lift === 'L' ? 'R' : 'L';
-      seg(fw, 0, W, 27, 32); seg(fw, 0, W + 2, 30, 33); seg(lift, 0, W, 27, 37);
-    }
-    else if (passSide) { seg(passSide, 0, W, 27, 28); seg(passSide, 0, W + 5, 28, 31); }   // 패스: 보내는 쪽으로 팔을 뻗는다
-    else if (pose === 'screen') both(0, W, 27, 36);                   // 스크린: 팔을 몸 앞으로 모은다
-    else if (pose === 'guard') { both(0, W + 1, 27, 30); both(2, W + 3, 29, 33); both(4, W + 5, 32, 35); }   // 수비: 양팔을 옆으로 벌린다
-    else { down('L'); down('R'); }
-
-    // 유니폼 상의
-    shade(tx0, 26, tx1, 38, t.jersey);
-    box(tx0 - 1, 26, tx0 - 1, 28, t.jersey[0]); box(tx1 + 1, 26, tx1 + 1, 28, t.jersey[2]);   // 어깨
-    box(tx0, 26, tx1, 26, t.trim);                                    // 목둘레 선
-    if (!back) { box(M - 2 + T, 26, M + 1 + T, 27, sk[1]); dot(M - 1 + T, 28, sk[2]); dot(M + T, 28, sk[2]); }   // V자 목선
-    box(tx0, 38, tx1, 38, t.jersey[2]);
-    // 등번호(앞은 가슴, 뒤는 등)
-    const sT = back ? -T : T, dgx = mir ? SPR_W - 1 - (M + 1 + sT) : M - 3 + sT;   // 글자는 뒤집지 않고 자리만 옮긴다
-    SPR_DIGIT[num].forEach((row, j) => [...row].forEach((ch, i) => { if (ch === '#') raw(dgx + i, 30 + j, dgx + i, 30 + j, '#ffffff'); }));
-    // 몸 앞으로 오는 팔 (뒷모습에서는 몸에 가려 안 보인다)
-    if (!back && passSide) shade(tx0 - 1, 29, tx1 + 1, 31, sk);       // 반대쪽 팔이 가슴 앞을 가로지른다
-    if (!back && pose === 'screen') {                                 // 두 손을 허리 앞에 모은다
-      shade(tx0, 36, tx0 + 2, 37, sk); shade(tx1 - 2, 36, tx1, 37, sk); shade(M - 3, 37, M + 2, 40, sk);
-    }
-    // 목 · 머리
-    box(M - 2, 24, M + 1, 25, sk[2]);
-    const cx = M - 0.5, cy = 17, rx = 6.6, ry = 7.2;
-    const inHead = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
-    for (let y = 9; y <= 25; y++) for (let x = M - 8; x <= M + 7; x++) if (inHead(x, y)) dot(x, y, x < M - 5 ? sk[0] : x > M + 4 ? sk[2] : sk[1]);
-    if (!(T && back)) { dot(M - 8, 17, sk[2]); dot(M - 8, 18, sk[2]); }   // 귀 (돌아서면 한쪽만 보인다)
-    if (!(T && !back)) { dot(M + 7, 17, sk[2]); dot(M + 7, 18, sk[2]); }
-    // 머리카락
-    const hairAt = (x, y) => dot(x, y, x > M + 3 ? hr[1] : hr[0]);
-    const cap = top => { for (let y = 9; y <= top; y++) for (let x = M - 8; x <= M + 7; x++) if (inHead(x, y)) hairAt(x, y); };
-    const afro = full => { for (let y = 4; y <= 15; y++) for (let x = M - 11; x <= M + 10; x++) if (((x - cx) / 9.4) ** 2 + ((y - 11) / 6.6) ** 2 <= 1 && (full || !(inHead(x, y) && y > 13))) hairAt(x, y); };
-    const band = () => { box(M - 7, 13, M + 6, 14, '#f4f4f4'); box(M + 5, 13, M + 6, 14, '#c3c9d1'); };
-    const flat = () => { box(M - 6, 8, M + 5, 9, hr[0]); box(M + 3, 8, M + 5, 9, hr[1]); };
-    if (back) {                     // 뒷모습: 뒤통수가 머리카락으로 덮이고 목덜미만 살색
-      cap(look.style === 'beard' ? 18 : 21);
-      if (look.style === 'afro') afro(true);
-      if (look.style === 'band') band();
-      if (look.style === 'flat') flat();
-      if (T) {                      // 45도 뒷모습: 돌아선 쪽으로 뺨과 눈썹 끝이 살짝 보인다
-        for (let y = 15; y <= 22; y++) for (let x = M + 5; x <= M + 7; x++) if (inHead(x, y)) dot(x, y, sk[1]);
-        dot(M + 6, 16, hr[1]);
-      }
-    } else if (T) {                 // 45도 앞모습: 얼굴이 돌아선 쪽으로 쏠리고, 반대쪽은 옆머리가 보인다
-      if (look.style === 'short') cap(13);
-      else if (look.style === 'band') { cap(12); band(); }
-      else if (look.style === 'flat') { cap(12); flat(); }
-      else if (look.style === 'afro') afro(false);
-      else if (look.style === 'beard') { cap(11); for (let y = 20; y <= 25; y++) for (let x = M - 5; x <= M + 7; x++) if (inHead(x, y) && !(y === 21 && x >= M && x <= M + 3)) hairAt(x, y); }
-      for (let y = 9; y <= 19; y++) for (let x = M - 8; x <= M - 5; x++) if (inHead(x, y) && !(look.style === 'band' && (y === 13 || y === 14))) hairAt(x, y);
-      box(M - 2, 17, M - 1, 18, '#1b1410'); box(M + 4, 17, M + 4, 18, '#1b1410'); dot(M - 2, 17, '#ffffff');
-      box(M - 3, 15, M - 1, 15, hr[1]); box(M + 3, 15, M + 5, 15, hr[1]);
-      dot(M + 2, 19, sk[2]);                                          // 코
-      box(M, 21, M + 3, 21, look.style === 'beard' ? '#e9b9a0' : sk[2]);
-    } else {
-      if (look.style === 'short') { cap(13); for (let y = 14; y <= 15; y++) { hairAt(M - 7, y); hairAt(M + 6, y); } }
-      else if (look.style === 'band') { cap(12); band(); }
-      else if (look.style === 'flat') { cap(12); flat(); }
-      else if (look.style === 'afro') afro(false);
-      else if (look.style === 'beard') { cap(11); for (let y = 20; y <= 25; y++) for (let x = M - 8; x <= M + 7; x++) if (inHead(x, y) && !(y === 21 && x >= M - 2 && x <= M + 1)) hairAt(x, y); }
-      // 눈 · 눈썹 · 입
-      box(M - 4, 17, M - 3, 18, '#1b1410'); box(M + 2, 17, M + 3, 18, '#1b1410'); dot(M - 4, 17, '#ffffff'); dot(M + 2, 17, '#ffffff');
-      box(M - 5, 15, M - 3, 15, hr[1]); box(M + 2, 15, M + 4, 15, hr[1]);
-      box(M - 2, 21, M + 1, 21, look.style === 'beard' ? '#e9b9a0' : sk[2]);
-    }
-
-    // 바깥선: 그림 가장자리에 어두운 테두리를 둘러 도트 그림답게 또렷하게 한다
-    const img = c.getImageData(0, 0, SPR_W, SPR_H), d = img.data, edge = [];
-    const solid = (x, y) => x >= 0 && y >= 0 && x < SPR_W && y < SPR_H && d[(y * SPR_W + x) * 4 + 3] > 0;
-    for (let y = 0; y < SPR_H; y++) for (let x = 0; x < SPR_W; x++) {
-      if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) edge.push([x, y]);
-    }
-    for (const [x, y] of edge) raw(x, y, x, y, '#1c130d');
-    return cv;
-  }
-
-  // 옆모습. 오른쪽을 보는 그림을 찍고, left 면 좌우를 뒤집어 찍는다(번호 글자만은 뒤집지 않는다).
-  function makeSide(team, num, pose, left) {
-    const cv = document.createElement('canvas'); cv.width = SPR_W; cv.height = SPR_H;
-    const c = cv.getContext('2d');
-    const t = SPR_TEAM[team], look = SPR_LOOK[num], sk = look.skin, hr = look.hair, bd = SPR_BUILD[num], M = SPR_MID;
-    const raw = (x0, y0, x1, y1, col) => { c.fillStyle = col; c.fillRect(x0, y0, x1 - x0 + 1, y1 - y0 + 1); };
-    const box = (x0, y0, x1, y1, col) => left ? raw(SPR_W - 1 - x1, y0, SPR_W - 1 - x0, y1, col) : raw(x0, y0, x1, y1, col);
-    const dot = (x, y, col) => box(x, y, x, y, col);
-    const shade = (x0, y0, x1, y1, pal) => { box(x0, y0, x1, y1, pal[1]); box(x0, y0, x0, y1, pal[0]); box(Math.max(x0 + 1, x1 - 1), y0, x1, y1, pal[2]); };
-    const WHITE = ['#ffffff', '#eef0f3', '#c3c9d1'], FAR = [sk[1], sk[2], sk[2]];
-    const w = bd.hw + 1, tx0 = M - (w >> 1), tx1 = tx0 + w - 1;      // 옆에서 본 몸통 두께
-    const W = bd.arm - 1, ax0 = tx0 + 1, ax1 = ax0 + W;               // 팔이 어깨에 붙는 자리
-    const passing = pose === 'passL' || pose === 'passR';
-
-    // 다리: 먼 쪽 다리를 먼저(어둡게), 가까운 쪽 다리를 나중에
-    const leg = (off, up, pal) => {
-      const x0 = M - (bd.leg >> 1) - 1 + off, x1 = x0 + bd.leg - 1;
-      shade(x0, 46, x1, 50 - up, pal); shade(x0, 51 - up, x1, 52 - up, WHITE);
-      shade(x0 - 1, 53 - up, x1 + 2, 54 - up, WHITE); box(x0 - 1, 55 - up, x1 + 2, 55 - up, '#3a3f48');
-      dot(x1 + 1, 53 - up, t.jersey[1]);
-    };
-    if (pose === 'run1') { leg(-3, 0, FAR); leg(3, 3, sk); }
-    else if (pose === 'run2') { leg(3, 3, FAR); leg(-3, 0, sk); }
-    else if (pose === 'screen' || pose === 'guard') { leg(3, 0, FAR); leg(-3, 0, sk); }
-    else { leg(1, 0, FAR); leg(-1, 0, sk); }
-    // 반바지 · 상의
-    shade(tx0, 39, tx1, 45, t.shorts); box(tx0, 39, tx1, 39, t.trim); box(M, 41, M, 45, t.trim);
-    shade(tx0, 26, tx1, 38, t.jersey); box(tx0, 26, tx1, 26, t.trim); box(tx0, 38, tx1, 38, t.jersey[2]);
-    // 번호: 몸통 앞쪽에. 글자는 뒤집지 않는다
-    const dx = left ? SPR_W - 1 - (tx1 - 1) : tx1 - 5;
-    SPR_DIGIT[num].forEach((row, j) => [...row].forEach((ch, i) => { if (ch === '#') raw(dx + i, 30 + j, dx + i, 30 + j, '#ffffff'); }));
-    // 목 · 머리
-    box(M - 1, 24, M + 2, 25, sk[2]);
-    const cx = M + 0.5, cy = 17, rx = 6.6, ry = 7.2;
-    const inHead = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
-    const each = fn => { for (let y = 3; y <= 25; y++) for (let x = M - 11; x <= M + 11; x++) fn(x, y); };
-    each((x, y) => { if (inHead(x, y)) dot(x, y, x < M - 3 ? sk[2] : x > M + 5 ? sk[0] : sk[1]); });
-    dot(M + 8, 19, sk[1]);                                            // 코
-    // 머리카락: 윗머리와 뒤통수
-    const hairAt = (x, y) => dot(x, y, x < M - 2 ? hr[1] : hr[0]);
-    const cap = (top, backTo) => each((x, y) => { if (inHead(x, y) && (y <= top || (x <= M - 2 && y <= backTo))) hairAt(x, y); });
-    if (look.style === 'short') cap(13, 20);
-    else if (look.style === 'band') { cap(12, 20); box(M - 6, 13, M + 7, 14, '#f4f4f4'); box(M - 6, 13, M - 5, 14, '#c3c9d1'); }
-    else if (look.style === 'flat') { cap(12, 19); box(M - 5, 8, M + 6, 9, hr[0]); box(M - 5, 8, M - 3, 9, hr[1]); }
-    else if (look.style === 'afro') { cap(13, 20); each((x, y) => { if (y <= 15 && ((x - cx) / 9.4) ** 2 + ((y - 11) / 6.6) ** 2 <= 1 && !(inHead(x, y) && y > 13 && x > M - 2)) hairAt(x, y); }); }
-    else if (look.style === 'beard') { cap(11, 17); each((x, y) => { if (inHead(x, y) && y >= 20 && x >= M - 1 && !(y === 21 && x >= M + 5)) hairAt(x, y); }); }
-    if (look.style !== 'afro') box(M - 1, 17, M, 18, sk[2]);          // 귀
-    box(M + 4, 17, M + 5, 18, '#1b1410'); dot(M + 4, 17, '#ffffff');  // 눈
-    box(M + 3, 15, M + 6, 15, hr[1]);                                 // 눈썹
-    box(M + 5, 21, M + 7, 21, look.style === 'beard' ? '#e9b9a0' : sk[2]);   // 입
-    // 팔 (가까운 쪽 한 팔)
-    const limb = (xa, ya, xb, yb) => {
-      const n = Math.max(Math.abs(xb - xa), Math.abs(yb - ya));
-      for (let i = 0; i <= n; i++) { const x = Math.round(xa + (xb - xa) * i / n), y = Math.round(ya + (yb - ya) * i / n); shade(x, y, x + W, y + 1, sk); }
-    };
-    if (pose === 'up') limb(ax0, 28, M + 9, 12);                                          // 수비: 팔을 앞으로 들어 올린다
-    else if (pose === 'shoot') { limb(ax0, 28, M + 8, 6); shade(M + 8, 3, M + 9 + W, 5, sk); }   // 슛: 머리 위로 뻗고 손목을 꺾는다
-    else if (pose === 'reb') limb(ax0, 28, M + 7, 2);                                     // 리바운드: 끝까지 뻗는다
-    else if (pose === 'ball') { shade(ax0, 27, ax1, 33, sk); shade(ax0, 33, tx1 + 4, 35, sk); }   // 볼을 든 팔은 앞으로
-    else if (pose === 'run1') { shade(ax0, 27, ax1, 32, sk); shade(ax0, 31, tx1 + 2, 33, sk); }
-    else if (pose === 'run2') { shade(ax0, 27, ax1, 32, sk); shade(tx0 - 3, 31, ax1, 33, sk); }
-    else if (passing) shade(ax0, 28, tx1 + 7, 31, sk);                                    // 패스: 앞으로 쭉 뻗는다
-    else if (pose === 'screen') { shade(ax0, 27, ax1, 33, sk); shade(ax0, 33, tx1 + 1, 36, sk); }   // 스크린: 팔을 가슴 앞에 댄다
-    else if (pose === 'guard') limb(ax0, 28, tx1 + 5, 35);                                // 수비: 팔을 앞으로 벌려 내민다
-    else shade(ax0, 27, ax1, 41, sk);
-
-    const img = c.getImageData(0, 0, SPR_W, SPR_H), d = img.data, edge = [];
-    const solid = (x, y) => x >= 0 && y >= 0 && x < SPR_W && y < SPR_H && d[(y * SPR_W + x) * 4 + 3] > 0;
-    for (let y = 0; y < SPR_H; y++) for (let x = 0; x < SPR_W; x++) {
-      if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) edge.push([x, y]);
-    }
-    for (const [x, y] of edge) raw(x, y, x, y, '#1c130d');
-    return cv;
-  }
-
   // face: 'f' 앞 · 'b' 뒤 · 'l' 왼쪽 · 'r' 오른쪽 · 'fl' 'fr' 'bl' 'br' 45도
-  function spriteOf(team, num, pose, face) {
-    face = face === true ? 'b' : face || 'f';
-    const key = team + num + pose + '/' + face;
-    if (!spriteCache.has(key)) {
-      spriteCache.set(key, face === 'l' || face === 'r' ? makeSide(team, num, pose, face === 'l')
-        : makeSprite(team, num, pose, face[0] === 'b', face[1] === 'r' ? 1 : face[1] === 'l' ? -1 : 0));
-    }
-    return spriteCache.get(key);
-  }
-
-  // 볼 든 손끝이 그림 속 어디인가 (makeSprite·makeSide 의 '볼 들기' 팔 끝과 맞춘다)
-  function handAt(p, face) {
-    const bd = SPR_BUILD[p.num], W = bd.arm - 1;
-    let px;
-    if (face === 'l' || face === 'r') { const w = bd.hw + 1; px = SPR_MID - (w >> 1) + w + 6; }
-    else px = SPR_MID + bd.hw + W + 6 - (face.length > 1 ? 1 : 0);
-    if (face === 'l' || face[1] === 'l') px = SPR_W - 1 - px;
-    return { px, py: 34 };
-  }
+  const spriteOf = (team, num, pose, face) => Sprites.get(team, num, pose || 'stand', face === true ? 'b' : face || 'f');
 
   // ───────── 말풍선 ─────────
   // 슛·패스·스크린·돌파 때 그 선수가 머리 위 말풍선으로 한마디 한다
@@ -930,7 +691,11 @@
     if (S.result !== view.lastResult) {
       view.lastResult = S.result;
       const r = S.result;
-      if (r && r.kind === 'steal' && r.by) say(typeof r.by === 'string' ? r.by : r.by.id, '스틸');
+      if (r && r.kind === 'steal' && r.by) {
+        const id = typeof r.by === 'string' ? r.by : r.by.id;
+        say(id, '스틸');
+        if (!view.replay) view.stealBy = { id, until: performance.now() + 2000 };
+      }
     }
     if (view.replay || S.phase === 'result' || S.phase === 'over') return;
     const poss = S.poss.A + S.poss.B, cur = new Set(R.screens(S).map(([o, d]) => o.id + '>' + d.id));
@@ -941,15 +706,32 @@
   }
 
   // opt: pose 자세 · face 보는 방향 · jump 뛰어오른 높이(키에 대한 비율)
+  // 그린 그림과 배율을 돌려준다 (볼을 손에 붙일 때 쓴다)
   function drawFigure(p, g, opt) {
     const s = g.s, h = figH(p, g), jump = (opt.jump || 0) * h;
     const sq = 1 - (opt.jump || 0) * 1.2;                     // 뛰어오르면 그림자가 작아진다
     ctx.beginPath(); ctx.ellipse(g.x + 0.06 * s, g.y + 0.02 * s, 0.46 * s * sq, 0.16 * s * sq, 0, 0, Math.PI * 2); ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fill();
-    const u = h / (SPR_FOOT - SPR_TOP + 1);                   // 그림의 한 점이 화면에서 몇 픽셀인가
+    const u = h / Sprites.H, img = spriteOf(p.team, p.num, opt.pose, opt.face);   // u: 그림의 한 점이 화면에서 몇 픽셀인가
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(spriteOf(p.team, p.num, opt.pose || 'stand', opt.face), g.x - SPR_MID * u, g.y - (SPR_FOOT + 1) * u - jump, SPR_W * u, SPR_H * u);
+    ctx.drawImage(img, g.x - Sprites.W / 2 * u, g.y - Sprites.FOOT * u - jump, Sprites.W * u, Sprites.CH * u);
     ctx.imageSmoothingEnabled = true;
+    return { img, u, jump };
   }
+  // 그린 선수 그림에서 볼이 놓일 자리 (g 는 그 선수의 발 위치)
+  const ballSpot = (fig, g) => ({ x: g.x + (fig.img.ball.x - Sprites.W / 2) * fig.u, y: g.y - (Sprites.FOOT - fig.img.ball.y) * fig.u - fig.jump });
+
+  // ───────── 동작 시간표 ─────────
+  // 슛: 웅크림 → 도약 → 릴리스(볼이 손을 떠남) → 팔로스루 → 착지
+  const SHOT_STEPS = [['sh0', 140], ['sh1', 100], ['shoot', 140], ['sh3', 200], ['land', 120]];
+  const SHOT_WIND = 300, SHOT_LAND = 580;              // 볼이 손을 떠나는 때, 발이 땅에 닿는 때
+  // 달리기: 디딤(몸이 낮다) → 무릎 들기(몸이 한 점 뜬다) 네 칸
+  const RUN_STEPS = ['runC', 'run2', 'runD', 'run1'], RUN_MS = 100;
+  // 패스: 가슴으로 당기기 → 두 손 뻗기 → 거두기. 볼은 당긴 뒤에 손을 떠난다
+  const PASS_STEPS = [['pass0', 120], ['pass', 160], ['pass2', 140]], PASS_HOLD = 150;
+  const BREATH_MS = 700;                                // 서 있는 선수는 0.7초마다 어깨가 한 점 오르내린다
+  function stepAt(steps, t, last) { let a = 0; for (const [p, d] of steps) { if (t < a + d) return p; a += d; } return last; }
+  const jumpArc = (t, t0, t1, h) => (t > t0 && t < t1 ? Math.sin(Math.PI * (t - t0) / (t1 - t0)) * h : 0);
+  const DOT = 1 / Sprites.H;                            // 그림 한 점 (키에 대한 비율)
 
   // 도트 농구공
   let ballSprite = null;
@@ -984,12 +766,15 @@
     const order = [...S.players].sort((a, b) => depth(a.id) - depth(b.id));
     const now = performance.now(), sh = view.shot, shotT = sh && !sh.rest ? now - sh.t0 : -1;
     const screeners = (view.replay || S.phase === 'result' || S.phase === 'over') ? new Set() : new Set(R.screens(S).map(([o]) => o.id));
-    const faceOf = id => {
-      const d = disp[id], tgt = id === holder ? RIM : handler;
+    const pass = view.passer, passT = pass ? now - pass.t0 : -1;
+    const faceTo = (id, tgt) => {
+      const d = disp[id];
       let fx = tgt.x - d.x, fy = tgt.y - d.y;
       if (flipped) { fx = -fx; fy = -fy; }
       return FACES[((Math.round(Math.atan2(-fy, fx) / (Math.PI / 4)) % 8) + 8) % 8];
     };
+    const faceOf = id => faceTo(id, id === holder ? RIM : handler);
+    const figs = {};
     for (const p of order) {
       const d = disp[p.id], g = proj(d.x, d.y, 0);
       const reactor = !!(view.reactors && view.reactors.has(p.id));
@@ -1007,19 +792,25 @@
       ctx.globalAlpha = (view.reactors && p.team === turnTeam && !reactor) ? 0.4 : done ? 0.6 : 1;
       const defending = p.team !== S.offense;
       const near = Math.hypot(d.x - handler.x, d.y - handler.y) < HEX_W * 1.3;
-      let pose = 'stand', jump = 0;
-      if (shotT >= 0 && sh.by === p.id) { pose = 'shoot'; jump = shotT < 520 ? Math.sin(Math.PI * shotT / 520) * 0.16 : 0; }
-      else if (shotT >= SHOT_FLY && !sh.made && sh.reb === p.id) { pose = 'reb'; jump = Math.sin(Math.PI * Math.min(1, (shotT - SHOT_FLY) / SHOT_BOUNCE)) * 0.2; }
-      else if (view.passer && view.passer.id === p.id) pose = proj(disp[view.passer.to].x, disp[view.passer.to].y, 0).x >= g.x ? 'passR' : 'passL';
-      else if (stride[p.id]) pose = Math.floor(now / 110) % 2 ? 'run1' : 'run2';
+      const rebT = shotT - SHOT_WIND - SHOT_FLY;         // 리바운드: 볼이 림에 닿은 뒤로 흐른 시간
+      let pose = 'stand', jump = 0, face = faceOf(p.id);
+      if (shotT >= 0 && sh.by === p.id) { pose = stepAt(SHOT_STEPS, shotT, 'stand'); jump = jumpArc(shotT, 140, SHOT_LAND, 0.18); }
+      else if (shotT >= 0 && !sh.made && sh.reb === p.id && rebT >= 0) {
+        // 준비 자세로 기다리다가, 볼이 오기 직전에 뛰어올라 잡고, 내려와 가슴에 감싼다
+        if (rebT < SHOT_BOUNCE - 380) pose = 'land';
+        else if (rebT < REB_LAND) { pose = 'reb'; jump = jumpArc(rebT, SHOT_BOUNCE - 380, REB_LAND, 0.2); }
+        else pose = 'sh0';
+      }
+      else if (pass && pass.id === p.id) { pose = stepAt(PASS_STEPS, passT, 'stand'); face = faceTo(p.id, disp[pass.to]); }
+      else if (stride[p.id]) { const i = Math.floor(now / RUN_MS) % 4; pose = RUN_STEPS[i]; jump = i % 2 ? DOT : 0; }
       else if (defending && near && S.phase !== 'over') pose = 'up';
       else if (p.id === holder && !sh) pose = 'ball';
       else if (screeners.has(p.id) && p.id !== holder) pose = 'screen';
       else if (defending && S.phase !== 'over') pose = 'guard';
-      // 몸의 방향: 볼 가진 선수는 골대를, 나머지는 공격·수비 모두 볼을 본다.
+      else if (Math.floor((now + (p.team === 'B' ? BREATH_MS / 2 : 0)) / BREATH_MS) % 2) pose = 'breath';
+      // 몸의 방향: 볼 가진 선수는 골대를, 나머지는 공격·수비 모두 볼을 본다 (패스하는 선수는 받는 선수를).
       // 보는 쪽을 화면 기준 여덟 방향(45도 간격)으로 나눠 옆·앞·뒤·45도 그림을 고른다
-      const face = faceOf(p.id);
-      drawFigure(p, g, { pose, jump, face });
+      figs[p.id] = drawFigure(p, g, { pose, jump, face });
       ctx.globalAlpha = 1;
     }
 
@@ -1043,37 +834,115 @@
       }
     }
 
+    // 스틸: 볼이 뺏은 선수 손에 닿는 순간 번쩍
+    if (view.stealFlash && figs[view.stealFlash]) {
+      const id = view.stealFlash, f = figs[id], sp = ballSpot(f, proj(disp[id].x, disp[id].y, 0));
+      addFx('flash', { sx: sp.x, sy: sp.y, u: f.u });
+      view.stealFlash = null;
+    }
+
     // 공: 슛 중에는 궤적을 따라가고, 평소에는 볼 가진 선수의 손에
     if (view.shot) {
-      const pos = shotBall();
-      drawBall(pos.x, pos.y, pos.rad);
+      // 볼이 손을 떠나는 순간의 손 위치를 기억해 두고, 날아가는 길을 거기서 시작한다
+      if (shotT >= SHOT_WIND && !sh.relOff && figs[sh.by]) {
+        const d = disp[sh.by], sp = ballSpot(figs[sh.by], proj(d.x, d.y, 0)), base = proj(sh.from.x, sh.from.y, 2.45);
+        sh.relOff = { x: sp.x - base.x, y: sp.y - base.y };
+      }
+      const pos = shotBall(figs);
+      if (pos) drawBall(pos.x, pos.y, pos.rad);
+      else { const d = disp[sh.by], g = proj(d.x, d.y, 0), sp = ballSpot(figs[sh.by], g); drawBall(sp.x, sp.y, 0.17 * g.s); }
     } else {
-      const g = proj(ballDisp.x, ballDisp.y, 0), hp = R.byId(S, holder);
-      // 볼은 볼 든 손끝에 붙인다 (보는 방향에 따라 손의 자리가 다르다)
-      const u = figH(hp, g) / (SPR_FOOT - SPR_TOP + 1), hand = handAt(hp, faceOf(holder));
-      drawBall(g.x + (hand.px + 0.5 - SPR_MID) * u, g.y - (SPR_FOOT + 0.5 - hand.py) * u, 0.17 * g.s);
+      // 패스는 당기는 동안 준 선수 손에 있다가 떠난다. 날아가는 동안은 볼 위치(ballDisp)를 따라 손 높이로
+      const owner = pass && passT < PASS_HOLD ? pass.id : holder;
+      const og = proj(disp[owner].x, disp[owner].y, 0), sp = ballSpot(figs[owner], og);
+      const g = proj(ballDisp.x, ballDisp.y, 0);
+      let bx = g.x + (sp.x - og.x), by = g.y + (sp.y - og.y);
+      // 볼 가진 선수가 달리면 드리블: 손과 바닥 사이를 튄다
+      if (owner === holder && stride[holder] && !view.replay) {
+        const floor = g.y - 0.12 * g.s, b = Math.abs(Math.cos(Math.PI * (now % 380) / 380));
+        by = floor + (by - floor) * b;
+      }
+      drawBall(bx, by, 0.17 * g.s);
     }
   }
 
+  // ───────── 타격감 효과: 멈칫 · 화면 흔들림 · 반짝임 · 번쩍 · 먼지 ─────────
+  // 크기는 선수 그림의 한 점에 맞춰서 선수와 따로 놀지 않게 한다. at 은 코트 좌표 {x,y,z} 또는 화면 좌표 {sx,sy,u}
+  const FX_MS = { dust: 320, spark: 260, flash: 260 };
+  function addFx(kind, at, delay = 0) { (view.fx || (view.fx = [])).push({ kind, at, t0: performance.now() + delay }); }
+  function drawFx(now) {
+    if (!view.fx || !view.fx.length) return false;
+    view.fx = view.fx.filter(f => now < f.t0 + FX_MS[f.kind]);
+    for (const f of view.fx) {
+      const k = (now - f.t0) / FX_MS[f.kind];
+      if (k < 0) continue;
+      const a = f.at, P = a.sx != null ? { x: a.sx, y: a.sy } : proj(a.x, a.y, a.z || 0);
+      const u = a.u || 0.044 * P.s, px = (x, y, w, h, col) => { ctx.fillStyle = col; ctx.fillRect(x, y, w, h); };
+      if (f.kind === 'dust') {                 // 발밑 양옆으로 도트 먼지가 퍼지며 옅어진다
+        ctx.globalAlpha = 1 - k;
+        for (const dir of [-1, 1]) for (let i = 0; i < 3; i++) {
+          const x = P.x + dir * (5 + i * 3 + 9 * k * (1 + i * 0.4)) * u, y = P.y - (1 + i * 1.5 + 5 * k * (1 - k) * (2 + i)) * u;
+          const r = Math.max(1, Math.round((4 - i) * (1 - k * 0.5))) * u;
+          px(x - r / 2, y - r / 2, r, r, i ? '#e4cfa6' : '#f3e6cc');
+        }
+        ctx.globalAlpha = 1;
+      } else if (f.kind === 'spark') {         // 반짝임: 십자 모양 도트가 커졌다 작아진다
+        const r = Math.round((a.big ? 4 : 3) * Math.sin(Math.PI * k)), x = P.x + (a.dx || 0) * u, y = P.y + (a.dy || 0) * u;
+        const col = k < 0.5 ? '#ffffff' : '#ffe45c';
+        px(x - (r + 0.5) * u, y - u / 2, (2 * r + 1) * u, u, col); px(x - u / 2, y - (r + 0.5) * u, u, (2 * r + 1) * u, col);
+        if (r >= 2) px(x - 1.5 * u, y - 1.5 * u, 3 * u, 3 * u, '#fff6b0');
+      } else if (f.kind === 'flash') {         // 번쩍: 맞은 자리에서 여덟 갈래로 빛이 퍼진다
+        const r0 = 2 + 9 * k, r1 = r0 + 4 * (1 - k), col = k < 0.4 ? '#ffffff' : '#ffe45c';
+        for (let i = 0; i < 8; i++) {
+          const ang = i * Math.PI / 4;
+          for (let r = r0; r <= r1; r++) px(P.x + Math.cos(ang) * r * u - u / 2, P.y + Math.sin(ang) * r * u - u / 2, u, u, col);
+        }
+        if (k < 0.35) { ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.beginPath(); ctx.arc(P.x, P.y, 6 * (1 - k) * u, 0, Math.PI * 2); ctx.fill(); }
+      }
+    }
+    return view.fx.length > 0;
+  }
+  // 슛 도중 정해진 순간에 한 번씩: 슈터 착지 먼지, 그물 통과(출렁·반짝임·3점이면 흔들림), 리바운드 착지 먼지
+  function shotEvents(now) {
+    const sh = view.shot;
+    if (!sh || sh.rest) return;
+    const t = now - sh.t0, ARR = SHOT_WIND + SHOT_FLY;
+    sh.fired = sh.fired || new Set();
+    const once = (key, cond, fn) => { if (cond && !sh.fired.has(key)) { sh.fired.add(key); fn(); } };
+    const feet = id => ({ x: disp[id].x, y: disp[id].y });
+    once('land', t >= SHOT_LAND, () => addFx('dust', feet(sh.by)));
+    if (sh.made) once('net', t >= ARR, () => {
+      view.swish = now;
+      const rim = { x: RIM.x, y: RIM.y, z: RIM_Z };
+      addFx('spark', { ...rim, dx: -9, dy: -6, big: true });
+      addFx('spark', { ...rim, dx: 8, dy: -9 }, 60);
+      addFx('spark', { ...rim, dx: -2, dy: -13 }, 110);
+      if (sh.three) view.shake = { t0: now, dur: SHAKE_MS, amp: Math.max(2, 0.07 * k) };
+    });
+    else if (sh.reb) once('reb', t >= ARR + REB_LAND, () => addFx('dust', feet(sh.reb)));
+  }
+
   // ───────── 슛 애니메이션 ─────────
-  // 볼이 슈터에게서 포물선으로 골대까지 날아간다. 들어가면 골대에 머무르고,
+  // 슈터가 웅크렸다 뛰어올라 볼을 놓으면, 볼이 포물선으로 골대까지 날아간다. 들어가면 그물에 닿는 순간 잠깐 멈췄다가(멈칫) 그물에 머무르고,
   // 빗나가면 림에서 튕겨 리바운드를 잡은 선수에게 간다. 두 궤적 모두 점선으로 남긴다.
   const SHOT_FLY = 800, SHOT_HANG = 350, SHOT_BOUNCE = 650;
+  const SHOT_STOP = 100, SHAKE_MS = 180, SWISH_MS = 420, STEAL_STOP = 140;   // 멈칫 0.1초 · 3점슛 흔들림 0.18초 · 그물 출렁 · 스틸 멈칫 0.14초
+  const REB_LAND = SHOT_BOUNCE + 140;                 // 볼이 림에 닿은 뒤 리바운드 잡은 선수가 땅에 닿는 때
 
   function startShot(from, result) {
     if (!result || (result.kind !== 'made' && result.kind !== 'miss')) return;
-    view.shot = { from, by: result.by, made: result.kind === 'made', reb: result.reb || null, t0: performance.now(), rest: false };
     // 슛 종류는 규칙(rules.js shotInfo)과 같은 기준: 3m 안은 골밑, 3점 라인 밖은 3점, 그 사이는 미들
     const sd = Math.hypot(from.x - RIM.x, from.y - RIM.y);
     const three = sd > 6.75 || (Math.abs(from.x - RIM.x) > 6.6 && from.y < 2.99);
+    view.shot = { from, by: result.by, made: result.kind === 'made', reb: result.reb || null, three, t0: performance.now(), rest: false };
     say(result.by, sd <= 3 ? '골밑슛' : three ? '3점슛' : '미들슛');
     // 리바운드: 튕긴 볼을 잡는 순간, 잡은 선수가 말한다
     if (result.kind === 'miss' && result.reb) {
       const shot = view.shot;
-      setTimeout(() => { if (view.shot === shot) { say(result.reb, '리바운드'); requestDraw(); } }, SHOT_FLY + SHOT_BOUNCE - 120);
+      setTimeout(() => { if (view.shot === shot) { say(result.reb, '리바운드'); requestDraw(); } }, SHOT_WIND + SHOT_FLY + SHOT_BOUNCE - 120);
     }
     view.locked = true;
-    const total = SHOT_FLY + (view.shot.made ? SHOT_HANG : SHOT_BOUNCE);
+    const total = SHOT_WIND + SHOT_FLY + (view.shot.made ? SHOT_STOP + SHOT_HANG : REB_LAND + 160);
     setTimeout(() => {
       if (!view.shot) return;
       // 결과를 넘길 때까지 그대로 둔다: 들어간 볼은 골대에, 빗나간 볼은 리바운드 잡은 선수 손에. 궤적 점선도 남긴다
@@ -1085,16 +954,20 @@
     requestDraw();
   }
 
-  // 지금 이 순간 볼이 그려질 화면 위치와 반지름. 궤적 점선도 여기서 그린다.
-  function shotBall() {
+  // 지금 이 순간 볼이 그려질 화면 위치와 반지름. 궤적 점선도 여기서 그린다. 볼이 아직 손을 떠나기 전이면 null
+  function shotBall(figs) {
     const sh = view.shot;
-    const now = sh.rest ? 1e9 : performance.now() - sh.t0;
+    const raw = sh.rest ? 1e9 : performance.now() - sh.t0, ARR = SHOT_WIND + SHOT_FLY;
+    if (raw < SHOT_WIND) return null;
+    // 들어간 슛은 볼이 림에 닿는 순간 SHOT_STOP 만큼 멈춘다
+    const now = (sh.made && raw > ARR ? Math.max(ARR, raw - SHOT_STOP) : raw) - SHOT_WIND;
     const from = { x: sh.from.x, y: sh.from.y, z: 2.45 }, rim = { x: RIM.x, y: RIM.y, z: RIM_Z };
     const dist = Math.hypot(rim.x - from.x, rim.y - from.y);
     const lift = Math.max(1.1, dist * 0.24);                     // 멀리서 쏠수록 높이 뜬다
     const lerp3 = (a, b, t, up) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t + up * 4 * t * (1 - t) });
     const scr = q => { const p = proj(q.x, q.y, q.z); return { x: p.x, y: p.y, rad: 0.17 * p.s }; };
-    const fly = t => scr(lerp3(from, rim, t, lift));
+    const off = sh.relOff || { x: 0, y: 0 };                     // 슈터 손에서 출발하도록 처음엔 손 쪽으로 당긴다
+    const fly = t => { const p = scr(lerp3(from, rim, t, lift)); return { x: p.x + off.x * (1 - t), y: p.y + off.y * (1 - t), rad: p.rad }; };
 
     const dashed = (pts, color) => {
       ctx.save();
@@ -1109,12 +982,12 @@
     for (let i = 0; i <= 28; i++) { const t = i / 28; if (t <= tFly) path.push(fly(t)); }
     dashed(path, 'rgba(255,255,255,.9)');
     if (now < SHOT_FLY) return fly(tFly);
-    if (sh.made) return scr({ x: RIM.x, y: RIM.y, z: RIM_Z - 0.25 });      // 그물 안에 머무른다
+    if (sh.made) return scr({ x: RIM.x, y: RIM.y, z: RIM_Z - Math.min(0.25, (now - SHOT_FLY) / 170 * 0.25) });   // 그물을 지나 그 안에 머무른다
 
     // 빗나감: 림에서 튕겨 리바운드 잡은 선수의 손으로
-    const d = disp[sh.reb];
-    const hand = { x: d.x + 0.3, y: d.y, z: 1.7 };
-    const bounce = t => scr(lerp3(rim, hand, t, 0.9));
+    const d = disp[sh.reb], dg = proj(d.x, d.y, 0), rs = scr(rim);
+    const end = figs && figs[sh.reb] ? ballSpot(figs[sh.reb], dg) : scr({ x: d.x + 0.3, y: d.y, z: 1.7 });
+    const bounce = t => ({ x: rs.x + (end.x - rs.x) * t, y: rs.y + (end.y - rs.y) * t - 0.9 * dg.s * 4 * t * (1 - t), rad: rs.rad + (0.17 * dg.s - rs.rad) * t });
     const tB = Math.min(1, (now - SHOT_FLY) / SHOT_BOUNCE);
     const bp = [];
     for (let i = 0; i <= 18; i++) { const t = i / 18; if (t <= tB) bp.push(bounce(t)); }
@@ -1149,7 +1022,9 @@
       } else { cur.x = tx; cur.y = ty; stride[id] = false; }
     };
     const rp = view.replay ? view.replay.cur : null;      // 리플레이 중이면 기록된 장면의 위치를 쓴다
-    for (const p of S.players) {
+    const frozen = now < (view.stopUntil || 0);           // 멈칫: 잠깐 모든 움직임을 멈춘다
+    if (frozen) moving = true;
+    else for (const p of S.players) {
       const at = rp ? rp.p[p.id] : p;
       const c = R.center(at.q, at.r);
       walk(p.id, c.x, c.y);
@@ -1159,15 +1034,32 @@
     if (holder !== view.lastHolder) {
       const prev = view.lastHolder; view.lastHolder = holder;
       if (prev && disp[prev] && !view.shot && Math.hypot(ballDisp.x - disp[holder].x, ballDisp.y - disp[holder].y) > 0.6) {
-        view.passer = { id: prev, to: holder, until: now + 420 };
+        view.passer = { id: prev, to: holder, t0: now, until: now + 420 };
         if (prev[0] === holder[0]) say(holder, '패스');      // 볼을 받은 선수가 말한다
       }
     }
     if (view.passer) { if (now < view.passer.until) moving = true; else view.passer = null; }
+    const passHold = view.passer && now - view.passer.t0 < PASS_HOLD;   // 패스는 볼을 가슴으로 당긴 뒤에 떠난다
     if (view.shot) { ballDisp.x = disp[holder].x; ballDisp.y = disp[holder].y; if (!view.shot.rest) moving = true; }
-    else ease(ballDisp, disp[holder].x, disp[holder].y);
+    else if (!passHold && !frozen) ease(ballDisp, disp[holder].x, disp[holder].y);
+    // 스틸: 볼이 뺏은 선수에게 닿는 순간 0.14초 멈칫하고 번쩍
+    if (view.stealBy) {
+      const st = view.stealBy, d = disp[st.id];
+      if (now > st.until || !d) view.stealBy = null;
+      else if (Math.hypot(ballDisp.x - d.x, ballDisp.y - d.y) < 0.45) { view.stopUntil = now + STEAL_STOP; view.stealFlash = st.id; view.stealBy = null; }
+      moving = true;
+    }
+    shotEvents(now);
 
     ctx.clearRect(0, 0, cssW, cssH);
+    // 화면 흔들림(3점슛): 바닥을 먼저 칠해 흔들린 가장자리가 비지 않게 한다
+    const shk = view.shake && now < view.shake.t0 + view.shake.dur ? view.shake : null;
+    if (shk) {
+      const a = shk.amp * (1 - (now - shk.t0) / shk.dur);
+      ctx.fillStyle = '#12161c'; ctx.fillRect(0, 0, cssW, cssH);
+      ctx.save(); ctx.translate(Math.round(Math.sin(now * 0.9) * a), Math.round(Math.cos(now * 1.3) * a * 0.6));
+      moving = true;
+    }
     drawCourt();
     drawReach();
     drawScreens();
@@ -1175,11 +1067,19 @@
     drawPassLines();
     drawPlayers();
     if (flipped) drawHoop();            // 골대가 앞(아래)에 있을 때는 선수 위에 반투명하게
+    if (drawFx(now)) moving = true;
+    if (view.swish && now - view.swish < SWISH_MS) moving = true;
     drawCloseLabels();
     drawPassLabels();
     watchSays();
     if (drawBubbles(now)) moving = true;
+    if (shk) ctx.restore();
     if (moving) requestDraw();
+    else if (!view.breathTimer && S.phase !== 'over') {
+      // 멈춰 있을 때도 서 있는 선수가 숨을 쉬도록 다음 바뀌는 때에 한 번 더 그린다
+      const half = BREATH_MS / 2;
+      view.breathTimer = setTimeout(() => { view.breathTimer = null; requestDraw(); }, half - (now % half) + 5);
+    }
   }
 
   // ───────── 입력 ─────────
@@ -1283,9 +1183,10 @@
     if (aiTimer || !aiTurn()) return;
     aiTimer = setTimeout(aiStep, AI_DELAY);
   }
-  function aiStep() {
+  // force: 자동 검사에서 양 팀 모두 AI 로 둘 때
+  function aiStep(force) {
     aiTimer = null;
-    if (!aiTurn()) return;
+    if (!force && !aiTurn()) return;
     if (view.locked) { aiSchedule(); return; }
     view.passOpts = null;
     const ph = S.phase;
@@ -1536,7 +1437,9 @@
   function startGame() {
     clearTimeout(aiTimer); aiTimer = null;
     view.shot = null; view.replay = null; tape.poss = -1; tape.frames = [];
+    view.fx = []; view.shake = null; view.swish = null; view.stealBy = null; view.stealFlash = null; view.stopUntil = 0;
     S = R.newGame(formation, (Math.random() * 0x7fffffff) | 0, builds);
+    Sprites.warm();                     // 선수 그림을 한가할 때 미리 만들어 둔다 (폰에서 처음 나오는 자세가 끊기지 않게)
     window.__game.state = S;
     view.selected = view.reach = view.passOpts = null;
     view.locked = false;
@@ -1566,7 +1469,7 @@
   $('helpClose').addEventListener('click', () => { elHelp.hidden = true; });
 
   // 자동 검사용
-  window.__game = { state: null, toScreen, view, builds, tape, spriteOf, isRotated: () => rotated };
+  window.__game = { state: null, toScreen, view, builds, tape, spriteOf, isRotated: () => rotated, disp, startShot, requestDraw, autoStep: () => { if (S && !view.locked && S.phase !== 'result' && S.phase !== 'over') aiStep(true); } };
 
   showSetup();
 })();
