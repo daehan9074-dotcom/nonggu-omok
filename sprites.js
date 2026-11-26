@@ -64,6 +64,7 @@ const Sprites = (() => {
     bent: { hipR: [.066, .47, -.01], knR: [.08, .26, .055], anR: [.085, .05, 0], toeR: [.09, .025, .085] },
     crouch: { hipR: [.068, .44, -.03], knR: [.088, .24, .08], anR: [.09, .05, 0], toeR: [.095, .025, .085] },
     wide: { hipR: [.07, .42, -.025], knR: [.15, .225, .065], anR: [.17, .05, 0], toeR: [.18, .025, .085] },
+    ready: { hipR: [.068, .455, -.02], knR: [.1, .255, .06], anR: [.11, .05, 0], toeR: [.115, .025, .085] },
   };
   const POSE = {
     stand: { pelvis: [0, .45, 0], neck: [0, .82, 0], head: [0, .905, .008],
@@ -117,11 +118,20 @@ const Sprites = (() => {
       legs: { hipR: [.064, .49, 0], knR: [.066, .28, .06], anR: [.07, .05, .08], toeR: [.07, .025, .16],
         hipL: [-.064, .49, 0], knL: [-.066, .27, -.02], anL: [-.07, .06, -.08], toeL: [-.07, .02, 0] } },
   };
+  // 볼 없는 공격수: 무릎을 굽히고 두 손을 가슴 앞에 내민 준비 자세. 좌우로 체중을 옮기고(readyL·readyR), 가끔 한 손을 들어 볼을 부른다(call)
+  POSE.ready = { pelvis: [0, .425, -.02], neck: [0, .785, .05], head: [0, .872, .07],
+    shR: [0, .765, .04], elR: [.03, .645, .1], haR: [.015, .72, .17], legs: 'ready' };
+  POSE.readyL = { ...POSE.ready, shift: 0.022 };
+  POSE.readyR = { ...POSE.ready, shift: -0.022 };
+  POSE.call = { ...POSE.ready, elR: [.03, .93, .04], haR: [-.005, 1.06, .06], elL: [-.03, .645, .1], haL: [-.015, .72, .17] };
   const MIRROR = { run2: 'run1', runD: 'runC' };
 
   // 자세 → 관절. 왼쪽(L)이 없으면 오른쪽을 좌우로 뒤집어 만든다.
   // 어깨·팔꿈치·손의 x 는 어깨 끝에서 잰 값이라 어깨 너비 sw 만큼 바깥으로 민다 (abs 에 적힌 관절은 몸 가운데에서 잰 값)
+  // 이름 끝에 '+d' 가 붙으면 드리블: 오른손을 허리 앞 아래로 내려 볼을 친다 (달리기 자세에 붙여 쓴다)
   function joints(name, sw) {
+    const dribble = name.endsWith('+d');
+    if (dribble) name = name.slice(0, -2);
     const base = POSE[MIRROR[name] || name] || POSE.stand, abs = base.abs || {};
     const legs = typeof base.legs === 'string' ? LEGS[base.legs] : base.legs || LEGS.stand;
     const src = { ...legs, ...base }, j = {};
@@ -136,21 +146,27 @@ const Sprites = (() => {
     j.neck = add(j.neck, [0, -0.04, 0]);
     for (const key of ['shR', 'shL', 'elR', 'elL', 'haR', 'haL']) j[key] = add(j[key], [0, -0.045, 0]);
     j.head = add(j.head, [0, 0.014, 0]);
+    if (base.shift) for (const key of ['pelvis', 'neck', 'head', 'shR', 'shL', 'elR', 'elL', 'haR', 'haL']) j[key] = add(j[key], [base.shift, 0, 0]);   // 체중 옮기기
     if (MIRROR[name]) {
       const m = {};
       for (const [key, v] of Object.entries(j)) {
         const kk = key.endsWith('R') ? key.slice(0, -1) + 'L' : key.endsWith('L') ? key.slice(0, -1) + 'R' : key;
         m[kk] = [-v[0], v[1], v[2]];
       }
+      if (dribble) dribbleArm(m, sw);
       return m;
     }
+    if (dribble) dribbleArm(j, sw);
     return j;
   }
+  function dribbleArm(j, sw) { j.elR = [sw + .035, .575, .05]; j.haR = [sw + .02, .455, .15]; }
 
   // 볼이 그림의 어디에 오는가 (자세마다)
   function ballPoint(J, pose) {
     const mid = lerp3(J.haR, J.haL, 0.5);
+    if (pose.endsWith('+d')) return add(J.haR, [0, -0.085, 0.02]);   // 드리블: 볼 윗면이 손바닥에 닿는다
     switch (pose) {
+      case 'ball': return add(mid, [0, -0.005, 0.03]);                // 두 손 사이에 끼워 든다
       case 'sh0': case 'pass0': return add(mid, [0, 0, 0.07]);
       case 'sh1': return add(mid, [0, 0.05, 0.03]);
       case 'shoot': return add(J.haR, [-0.01, 0.075, 0.02]);
@@ -334,8 +350,9 @@ const Sprites = (() => {
       if (best >= 0) set(i, mix(R[mat[best]][0], '#000000', 0.5));
     }
     c.putImageData(img, 0, 0);
-    const bp = proj(ballPoint(J, pose));
+    const bp = proj(ballPoint(J, pose)), body = proj(lerp3(J.pelvis, J.neck, 0.6));
     cv.ball = { x: bp.X, y: bp.Y };                // 볼이 놓일 자리 (그림 좌표)
+    cv.ballBehind = bp.D < body.D - 0.01;          // 볼이 몸 뒤에 있다 (등을 보이면 볼이 몸에 가려진다)
     return cv;
   }
 
@@ -349,7 +366,8 @@ const Sprites = (() => {
   // 미리 만들어 두기: 그림 한 장은 PC 에서 약 2ms, 폰에서는 몇 배라 처음 나오는 자세에서 끊길 수 있다.
   // 경기를 시작하면 자주 쓰는 자세부터 화면이 한가할 때 조금씩 만들어 둔다
   const POSES = Object.keys(POSE).concat(Object.keys(MIRROR)), FACES = Object.keys(VIEW);
-  const ORDER = ['stand', 'breath', 'guard', 'ball', 'up', 'runC', 'run1', 'runD', 'run2', 'screen',
+  const ORDER = ['ready', 'readyL', 'readyR', 'guard', 'ball', 'up', 'runC', 'run1', 'runD', 'run2', 'screen', 'call',
+    'runC+d', 'run1+d', 'runD+d', 'run2+d', 'stand', 'breath',
     'sh0', 'sh1', 'shoot', 'sh3', 'land', 'pass0', 'pass', 'pass2', 'reb'];
   let warmJob = null;
   function warm(teams = ['A', 'B']) {

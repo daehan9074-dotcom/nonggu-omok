@@ -666,6 +666,7 @@
     view.says = view.says.filter(b => now < b.until && disp[b.id]);
     for (const b of view.says) {
       const o = overHead(b.id);
+      if (b.id === view.markId) o.y -= 0.2 * proj(disp[b.id].x, disp[b.id].y, 0).s;   // 머리 위 볼 표시를 가리지 않게
       ctx.font = 'bold 13px "Malgun Gothic", sans-serif';
       const w = ctx.measureText(b.text).width + 16, h = 23;
       const x = Math.max(4, Math.min(cssW - w - 4, o.x - w / 2)), y = Math.max(4, o.y - h - 9);
@@ -707,15 +708,18 @@
 
   // opt: pose 자세 · face 보는 방향 · jump 뛰어오른 높이(키에 대한 비율)
   // 그린 그림과 배율을 돌려준다 (볼을 손에 붙일 때 쓴다)
-  function drawFigure(p, g, opt) {
+  // under(fig): 그림자 다음, 몸을 그리기 직전에 그릴 것 (몸 뒤에 있어 가려지는 볼)
+  function drawFigure(p, g, opt, under) {
     const s = g.s, h = figH(p, g), jump = (opt.jump || 0) * h;
     const sq = 1 - (opt.jump || 0) * 1.2;                     // 뛰어오르면 그림자가 작아진다
     ctx.beginPath(); ctx.ellipse(g.x + 0.06 * s, g.y + 0.02 * s, 0.46 * s * sq, 0.16 * s * sq, 0, 0, Math.PI * 2); ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fill();
     const u = h / Sprites.H, img = spriteOf(p.team, p.num, opt.pose, opt.face);   // u: 그림의 한 점이 화면에서 몇 픽셀인가
+    const fig = { img, u, jump };
+    if (under) under(fig);
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(img, g.x - Sprites.W / 2 * u, g.y - Sprites.FOOT * u - jump, Sprites.W * u, Sprites.CH * u);
     ctx.imageSmoothingEnabled = true;
-    return { img, u, jump };
+    return fig;
   }
   // 그린 선수 그림에서 볼이 놓일 자리 (g 는 그 선수의 발 위치)
   const ballSpot = (fig, g) => ({ x: g.x + (fig.img.ball.x - Sprites.W / 2) * fig.u, y: g.y - (Sprites.FOOT - fig.img.ball.y) * fig.u - fig.jump });
@@ -729,6 +733,13 @@
   // 패스: 가슴으로 당기기 → 두 손 뻗기 → 거두기. 볼은 당긴 뒤에 손을 떠난다
   const PASS_STEPS = [['pass0', 120], ['pass', 160], ['pass2', 140]], PASS_HOLD = 150;
   const BREATH_MS = 700;                                // 서 있는 선수는 0.7초마다 어깨가 한 점 오르내린다
+  // 볼 없는 공격수: 무릎을 굽힌 준비 자세로 0.7초마다 좌우로 체중을 옮기고, 4.2초에 한 번(선수마다 다른 때) 손을 들어 볼을 부른다
+  const READY_MS = 700, CALL_EVERY = 4200;
+  function readyPose(p, now) {
+    const t = now + p.num * 700 + (p.team === 'B' ? 350 : 0);
+    if (t % CALL_EVERY < READY_MS) return 'call';
+    return Math.floor(t / READY_MS) % 2 ? 'readyL' : 'readyR';
+  }
   function stepAt(steps, t, last) { let a = 0; for (const [p, d] of steps) { if (t < a + d) return p; a += d; } return last; }
   const jumpArc = (t, t0, t1, h) => (t > t0 && t < t1 ? Math.sin(Math.PI * (t - t0) / (t1 - t0)) * h : 0);
   const DOT = 1 / Sprites.H;                            // 그림 한 점 (키에 대한 비율)
@@ -775,6 +786,25 @@
     };
     const faceOf = id => faceTo(id, id === holder ? RIM : handler);
     const figs = {};
+    // 지금 볼을 손에 든 선수 (날아가는 중이면 null). 든 볼은 그 선수와 앞뒤를 맞춰 그린다: 등을 보이면 몸에 가려진다
+    let held = null;
+    if (sh) { if (shotT >= 0 && shotT < SHOT_WIND) held = sh.by; else if (sh.rest && !sh.made && sh.reb) held = sh.reb; }
+    else {
+      const owner = pass && passT < PASS_HOLD ? pass.id : holder;
+      if (disp[owner] && Math.hypot(ballDisp.x - disp[owner].x, ballDisp.y - disp[owner].y) < 0.35) held = owner;
+    }
+    const drawHeld = (id, g, f) => {
+      const sp = ballSpot(f, g);
+      let by = sp.y;
+      // 볼 가진 선수가 달리면 드리블: 손바닥과 바닥 사이를 튄다
+      if (id === holder && stride[id] && !sh && !view.replay) {
+        const floor = g.y - 0.12 * g.s, b = Math.abs(Math.cos(Math.PI * (now % 380) / 380));
+        by = floor + (by - floor) * b;
+      }
+      const a = ctx.globalAlpha; ctx.globalAlpha = 1;
+      drawBall(sp.x, by, 0.17 * g.s);
+      ctx.globalAlpha = a;
+    };
     for (const p of order) {
       const d = disp[p.id], g = proj(d.x, d.y, 0);
       const reactor = !!(view.reactors && view.reactors.has(p.id));
@@ -802,15 +832,19 @@
         else pose = 'sh0';
       }
       else if (pass && pass.id === p.id) { pose = stepAt(PASS_STEPS, passT, 'stand'); face = faceTo(p.id, disp[pass.to]); }
-      else if (stride[p.id]) { const i = Math.floor(now / RUN_MS) % 4; pose = RUN_STEPS[i]; jump = i % 2 ? DOT : 0; }
+      else if (stride[p.id]) { const i = Math.floor(now / RUN_MS) % 4; pose = RUN_STEPS[i] + (p.id === held ? '+d' : ''); jump = i % 2 ? DOT : 0; }
+      else if (p.id === held) pose = 'ball';                       // 볼은 언제나 두 손에 들고 있다
       else if (defending && near && S.phase !== 'over') pose = 'up';
-      else if (p.id === holder && !sh) pose = 'ball';
-      else if (screeners.has(p.id) && p.id !== holder) pose = 'screen';
+      else if (screeners.has(p.id)) pose = 'screen';
       else if (defending && S.phase !== 'over') pose = 'guard';
-      else if (Math.floor((now + (p.team === 'B' ? BREATH_MS / 2 : 0)) / BREATH_MS) % 2) pose = 'breath';
+      else if (S.phase !== 'over') pose = readyPose(p, now);      // 볼 없는 공격수는 가만히 서 있지 않는다
+      else if (Math.floor(now / BREATH_MS) % 2) pose = 'breath';
       // 몸의 방향: 볼 가진 선수는 골대를, 나머지는 공격·수비 모두 볼을 본다 (패스하는 선수는 받는 선수를).
       // 보는 쪽을 화면 기준 여덟 방향(45도 간격)으로 나눠 옆·앞·뒤·45도 그림을 고른다
-      figs[p.id] = drawFigure(p, g, { pose, jump, face });
+      const hold = p.id === held;
+      const fig = drawFigure(p, g, { pose, jump, face }, hold ? f => { if (f.img.ballBehind) drawHeld(p.id, g, f); } : null);
+      if (hold && !fig.img.ballBehind) drawHeld(p.id, g, fig);
+      figs[p.id] = fig;
       ctx.globalAlpha = 1;
     }
 
@@ -841,29 +875,32 @@
       view.stealFlash = null;
     }
 
-    // 공: 슛 중에는 궤적을 따라가고, 평소에는 볼 가진 선수의 손에
-    if (view.shot) {
+    // 날아가는 볼: 슛은 궤적을 따라(점선도 여기서 그린다), 패스·스틸은 볼 위치(ballDisp)를 따라 받는 선수 손 높이로
+    if (sh) {
       // 볼이 손을 떠나는 순간의 손 위치를 기억해 두고, 날아가는 길을 거기서 시작한다
       if (shotT >= SHOT_WIND && !sh.relOff && figs[sh.by]) {
         const d = disp[sh.by], sp = ballSpot(figs[sh.by], proj(d.x, d.y, 0)), base = proj(sh.from.x, sh.from.y, 2.45);
         sh.relOff = { x: sp.x - base.x, y: sp.y - base.y };
       }
       const pos = shotBall(figs);
-      if (pos) drawBall(pos.x, pos.y, pos.rad);
-      else { const d = disp[sh.by], g = proj(d.x, d.y, 0), sp = ballSpot(figs[sh.by], g); drawBall(sp.x, sp.y, 0.17 * g.s); }
-    } else {
-      // 패스는 당기는 동안 준 선수 손에 있다가 떠난다. 날아가는 동안은 볼 위치(ballDisp)를 따라 손 높이로
-      const owner = pass && passT < PASS_HOLD ? pass.id : holder;
-      const og = proj(disp[owner].x, disp[owner].y, 0), sp = ballSpot(figs[owner], og);
-      const g = proj(ballDisp.x, ballDisp.y, 0);
-      let bx = g.x + (sp.x - og.x), by = g.y + (sp.y - og.y);
-      // 볼 가진 선수가 달리면 드리블: 손과 바닥 사이를 튄다
-      if (owner === holder && stride[holder] && !view.replay) {
-        const floor = g.y - 0.12 * g.s, b = Math.abs(Math.cos(Math.PI * (now % 380) / 380));
-        by = floor + (by - floor) * b;
-      }
-      drawBall(bx, by, 0.17 * g.s);
+      if (pos && !held) drawBall(pos.x, pos.y, pos.rad);
+    } else if (!held) {
+      const og = proj(disp[holder].x, disp[holder].y, 0), sp = ballSpot(figs[holder], og), g = proj(ballDisp.x, ballDisp.y, 0);
+      drawBall(g.x + (sp.x - og.x), g.y + (sp.y - og.y), 0.17 * g.s);
     }
+    // 볼 가진 선수 표시: 머리 위 주황 삼각형 (등을 보여 볼이 가려져도 누가 가졌는지 보이게)
+    view.markId = held && (!sh || sh.rest) ? held : null;
+    if (view.markId) drawBallMark(view.markId, figs[view.markId]);
+  }
+
+  function drawBallMark(id, fig) {
+    const p = R.byId(S, id), d = disp[id], g = proj(d.x, d.y, 0);
+    const top = g.y - figH(p, g) - (fig ? fig.jump : 0);
+    const w = Math.max(13, 0.34 * g.s), h = w * 0.72, y1 = top - 0.1 * g.s, y0 = y1 - h;
+    ctx.beginPath(); ctx.moveTo(g.x - w / 2, y0); ctx.lineTo(g.x + w / 2, y0); ctx.lineTo(g.x, y1); ctx.closePath();
+    ctx.lineJoin = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = '#1c130d'; ctx.stroke();
+    ctx.fillStyle = '#ff9a2e'; ctx.fill();
+    ctx.fillStyle = '#ffd08a'; ctx.fillRect(g.x - w / 2 + 3, y0 + 2, w - 6, Math.max(1.5, h * 0.16));   // 윗면 밝은 띠
   }
 
   // ───────── 타격감 효과: 멈칫 · 화면 흔들림 · 반짝임 · 번쩍 · 먼지 ─────────
