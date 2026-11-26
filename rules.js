@@ -102,6 +102,10 @@ const Rules = (() => {
   const PAINT_LIMIT = 3;      // 페인트존에서 연속으로 마칠 수 있는 공격 턴 수(3초 룰)
   const REB_REACH = 3;        // 볼이 떨어진 자리에서 이 거리(m) 안의 선수만 리바운드를 다툰다
   const SHORT_MID = 4.5;      // 골대에서 이 거리(m)까지가 짧은 미들
+  // 슛 기본 확률(능력치 70·수비 없음 기준). 구역 안에서도 가까울수록 잘 들어간다
+  const INSIDE_TOP = 0.66, INSIDE_DROP = 0.06;   // 골밑슛: 골대 바로 밑 0.66, 1m 멀어질 때마다 -0.06
+  const MID_TOP = 0.47, MID_LONG = 0.34;         // 미들슛: 골밑 경계(3m) 0.47 → 3점 라인 바로 안(롱투) 0.34
+  const THREE_TOP = 0.35;                        // 3점슛: 3점 라인 바로 밖 0.35
   const CUT_BONUS = 0.12;     // 컷인 슛 성공률 보정
   const CUT_RANGE = 3.5;      // 골대에서 이 거리(m) 안으로 파고들어야 컷인
   const REBOUND_CLOCK = 3;    // 공격 리바운드 뒤 다시 주어지는 턴
@@ -580,11 +584,17 @@ const Rules = (() => {
     const inside = d <= 3;
     const st = sh.stats;
 
+    // 기본 확률: 구역마다 기준에서 멀어질수록 조금씩 떨어진다
+    //  골밑슛 = 골대에서 · 미들슛 = 골밑 경계(3m)에서 · 3점슛 = 3점 라인에서
     let base;
-    if (d <= 1.6) base = 0.62;
-    else if (inside) base = 0.52;
-    else if (!three) base = d <= SHORT_MID ? 0.46 : 0.40;           // 골밑 바로 바깥의 짧은 미들은 조금 쉽다
-    else base = 0.32 - Math.max(0, d - 7.4) * 0.08;                 // 3점 라인에서 멀어질수록(딥쓰리) 빠르게 떨어진다
+    if (inside) base = INSIDE_TOP - d * INSIDE_DROP;                                 // 골대 0m 0.66 → 3m 0.48
+    else if (!three) base = MID_TOP - (d - 3) * (MID_TOP - MID_LONG) / 3.75;         // 3m 0.47 → 라인 바로 안(롱투) 0.34
+    else {
+      // 3점 라인 밖으로 나간 거리(코너는 옆줄 쪽 직선 라인 기준)
+      const corner = c.y < 2.99 && Math.abs(c.x - RIM.x) > 6.6;
+      const beyond = Math.max(0, corner ? Math.abs(c.x - RIM.x) - 6.6 : d - 6.75);
+      base = THREE_TOP - Math.min(beyond, 0.65) * 0.05 - Math.max(0, beyond - 0.65) * 0.08;  // 라인 0.35, 딥쓰리는 빠르게 떨어진다
+    }
 
     // 거리별로 쓰는 능력치가 다르다: 골밑슛 · 미들슛 · 3점슛
     const zone = inside ? 'inside' : three ? 'three' : 'mid';
